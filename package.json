@@ -1,0 +1,30 @@
+{
+  "name": "claude-rescue",
+  "version": "1.0.0",
+  "description": "Live cross-platform TUI to watch running Claude Code sessions, flag the stuck ones, and take them over to rescue them. Zero dependencies.",
+  "bin": {
+    "claude-rescue": "sessions.js"
+  },
+  "main": "sessions.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node sessions.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "sessions",
+    "rescue",
+    "monitor",
+    "tui",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "MIT",
+  "files": [
+    "sessions.js",
+    "README.md"
+  ]
+}

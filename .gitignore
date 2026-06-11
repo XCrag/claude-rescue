@@ -1,0 +1,8 @@
+# 依赖
+node_modules/
+
+# Claude Code 本地配置
+.claude
+
+# 系统 / 编辑器
+.DS_Store
