@@ -1,14 +1,14 @@
 # claude-rescue
 
-A **zero-dependency** terminal tool that **watches** your running **Claude Code** sessions in real time, flags the stuck ones, and **takes them over to rescue them** with one keypress. Behaves identically on **macOS / Windows / Linux**.
+简体中文 | [English](README.en.md)
 
-Every running Claude Code session writes a small JSON file at `~/.claude/sessions/<pid>.json`. This tool reads that directory and presents an interactive UI (TUI) listing each session's **sessionId, name, directory, status, and last-activity time**, **auto-refreshing every few seconds** so you can see at a glance which sessions are running and which are busy or idle.
+一个**零依赖**的终端工具，实时**监视**你正在运行的 **Claude Code** 会话，标记出卡住的那些，并能一键**接管它们进行救援**。在 **macOS / Windows / Linux** 上行为完全一致。
 
-> ⚠️ This directory only contains **running** sessions — the moment a session exits, its file is removed. So this tool is a real-time viewer of your **currently active** sessions.
+每个正在运行的 Claude Code 会话都会在 `~/.claude/sessions/<pid>.json` 写入一个小的 JSON 文件。本工具读取该目录，以交互式界面（TUI）列出每个会话的 **sessionId、名字、目录、状态和最近活动时间**，并**每隔几秒自动刷新**，让你一眼就能看出哪些会话在运行、哪些忙碌或空闲。
+
+> ⚠️ 该目录只包含**正在运行**的会话——会话一旦退出，其文件就会被移除。所以本工具是你**当前活跃**会话的实时查看器。
 >
-> The tool is **read-only**: it only reads session files; it never modifies or deletes anything, so you can safely leave it open all the time.
-
-> ℹ️ The TUI itself is in **Simplified Chinese** (as shown below). The status words and the takeover prompt are Chinese; this README explains them in English.
+> 本工具是**只读**的：它只读取会话文件，从不修改或删除任何东西，所以你可以放心一直开着它。
 
 ```
  Claude 会话                                              共 3 个 · 3 个运行中
@@ -20,139 +20,137 @@ Every running Claude Code session writes a small JSON file at `~/.claude/session
  ↑↓/jk 移动 · enter 详情 · a 自动刷新 · g 立即刷新 · / 过滤 · s 排序 · q 退出
 ```
 
-Column legend: **名字** = name, **ID** = sessionId (first 8 chars), **状态** = status (忙碌 = busy, 空闲 = idle), **活动** = last activity, **目录** = directory. `●` = process still running; `○` = exited (you normally won't see this, since exiting clears the file).
+列说明：**名字** = 会话名字，**ID** = sessionId（前 8 位），**状态**（忙碌 / 空闲），**活动** = 最近活动时间，**目录** = 工作目录。`●` = 进程仍在运行；`○` = 已退出（正常情况下你看不到它，因为退出会清除文件）。
 
-## Why there's no "rename / delete / clean up"
+## 为什么没有"重命名 / 删除 / 清理"
 
-- **Rename**: a session's name is owned by the **running Claude process** (kept in its memory and recorded in the session's transcript). Editing `sessions/<pid>.json` from outside is **immediately overwritten** by the running process. **To rename, use the built-in `/rename <name>` command inside Claude** — that's the only reliable way.
-- **Delete / clean up**: this directory only holds running sessions; delete a file and the process soon writes it back. And there are no "exited sessions" to clean up (exiting removes them automatically).
+- **重命名**：会话的名字归**正在运行的 Claude 进程**所有（保存在其内存中，并记录在会话的 transcript 里）。从外部编辑 `sessions/<pid>.json` 会**立即被运行中的进程覆盖**。**要重命名，请在 Claude 内部使用内置的 `/rename <名字>` 命令**——这是唯一可靠的方式。
+- **删除 / 清理**：该目录只保存正在运行的会话；删掉一个文件，进程很快会把它写回来。而且也没有"已退出的会话"需要清理（退出会自动移除它们）。
 
-So this tool focuses on one thing — **watching**.
+所以本工具专注于一件事——**监视**。
 
-## Requirements
+## 环境要求
 
-- **Node.js 16+** (check with `node --version`). That's all — **no `npm install`** required.
+- **Node.js 16+**（用 `node --version` 查看）。仅此而已——**无需 `npm install`**。
 
-## Run
+## 运行
 
 ```bash
 node sessions.js
 ```
 
-> Tip: run it in a **separate terminal window** (not inside a Claude session), so it can own the terminal display and you can see every active session, including that one.
+> 提示：在一个**单独的终端窗口**里运行它（不要在 Claude 会话内部运行），这样它能独占终端显示，你也能看到每个活跃会话，包括那一个。
 
-Or install it as a global `claude-rescue` command (a correct launcher is generated on every OS — a `.cmd` on Windows):
+或者把它安装成全局的 `claude-rescue` 命令（每个操作系统都会生成正确的启动器——Windows 上是 `.cmd`）：
 
 ```bash
 npm install -g .
 claude-rescue
 ```
 
-## Where it looks for sessions
+## 它在哪里查找会话
 
-The sessions directory is located automatically, with identical logic on every OS:
+会话目录会自动定位，在每个操作系统上逻辑一致：
 
-| Condition | Directory |
+| 条件 | 目录 |
 | --- | --- |
-| `CLAUDE_CONFIG_DIR` env var is set | `$CLAUDE_CONFIG_DIR/sessions` |
-| Otherwise (default) | `~/.claude/sessions` |
+| 设置了 `CLAUDE_CONFIG_DIR` 环境变量 | `$CLAUDE_CONFIG_DIR/sessions` |
+| 否则（默认） | `~/.claude/sessions` |
 
-`~` is your home directory — on **Windows** that's **`%USERPROFILE%\.claude\sessions`** (e.g. `C:\Users\you\.claude\sessions`), and on **macOS/Linux** it's **`$HOME/.claude/sessions`**. To point at another directory temporarily, use `--dir <path>`.
+`~` 是你的主目录——在 **Windows** 上是 **`%USERPROFILE%\.claude\sessions`**（例如 `C:\Users\you\.claude\sessions`），在 **macOS/Linux** 上是 **`$HOME/.claude/sessions`**。要临时指向另一个目录，用 `--dir <路径>`。
 
-## Auto-refresh
+## 自动刷新
 
-- By default it re-reads the directory **every 2 seconds**, keeping the list and statuses live;
-- Press **`a`** to toggle auto-refresh, **`g`** to refresh once manually;
-- The second header line shows the live state: `自动刷新 2 秒` (auto-refresh: 2s) / `自动刷新已关` (auto-refresh: off).
+- 默认**每 2 秒**重新读取一次目录，保持列表和状态实时更新；
+- 按 **`a`** 切换自动刷新，按 **`g`** 手动刷新一次；
+- 第二行表头显示实时状态：`自动刷新 2 秒` / `自动刷新已关`。
 
-## Anomaly monitoring
+## 异常监控
 
-The tool also reads the **tail** of each session's **transcript** (`~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`), skips the metadata records, looks only at substantive conversation, and classifies session health into three states:
+本工具还会读取每个会话 **transcript** 的**尾部**（`~/.claude/projects/<编码后的-cwd>/<sessionId>.jsonl`），跳过元数据记录，只看实质性的对话内容，把会话健康度分为三种状态：
 
-| State | Color | Criterion | Example detail |
+| 状态 | 颜色 | 判定标准 | 详情示例 |
 | --- | --- | --- | --- |
-| **Retrying** (`重试中`) | Yellow | The last substantive record is an API retry (`system/api_error`) — the tool is auto-retrying | `重试 3/10 · 520` |
-| **Error** (`错误`) | Red | One of the last 3 substantive records is an API-error assistant message (`isApiErrorMessage`) | `524 · Error 524: A timeout occurred` |
-| **Unresponsive** (`无响应`) | Yellow | The process is alive, but the session hasn't updated for **over 5 minutes** (likely stuck, or waiting on a very long response) | `无响应 8 分钟` |
+| **重试中** | 黄色 | 最后一条实质性记录是 API 重试（`system/api_error`）——工具正在自动重试 | `重试 3/10 · 520` |
+| **错误** | 红色 | 最后 3 条实质性记录中有一条是 API 错误的 assistant 消息（`isApiErrorMessage`） | `524 · Error 524: A timeout occurred` |
+| **无响应** | 黄色 | 进程存活，但会话**超过 5 分钟**没有更新（很可能卡住了，或在等一个非常长的响应） | `无响应 8 分钟` |
 
-- All three appear in the **status column** in their color (error = red, retrying/unresponsive = yellow), and the leading dot changes color to match;
-- The title bar shows the anomaly count (e.g. `· 2 异常`), counting all three states;
-- The **detail view** shows the specific reason (status code, retry count, unresponsive duration, etc.);
-- In the filter (`/`), type `异常` (anomaly), or `重试` / `错误` / `无响应`, to filter the matching sessions;
-- The `--json` output includes `abnormal` (boolean), `abnormalKind` (`ok` / `retrying` / `error` / `slow`), and `abnormalReason` fields, handy for scripted monitoring.
+- 这三种都会在**状态列**以对应颜色显示（错误 = 红，重试中 / 无响应 = 黄），开头的圆点也会变成相应颜色；
+- 标题栏显示异常数量（例如 `· 2 异常`），统计全部三种状态；
+- **详情视图**会显示具体原因（状态码、重试次数、无响应时长等）；
+- 在过滤（`/`）中，输入 `异常`，或 `重试` / `错误` / `无响应`，可筛选匹配的会话；
+- `--json` 输出包含 `abnormal`（布尔）、`abnormalKind`（`ok` / `retrying` / `error` / `slow`）和 `abnormalReason` 字段，方便脚本化监控。
 
-For performance it reads only a **small tail** of the transcript: "retrying / error" are cached by file mtime, while "unresponsive" is judged live by time on each pass. So even a huge transcript stays fast.
+出于性能考虑，它只读取 transcript 的一**小段尾部**："重试 / 错误"按文件 mtime 缓存，而"无响应"则在每次扫描时按时间实时判定。所以即使 transcript 很大也能保持快速。
 
-> Note: detection targets **currently running** sessions (those in `sessions/`). A session that errored / is retrying / is stuck while its process is still alive gets flagged; once the process has exited, it's no longer in this list (that's a historical session).
+> 注意：检测针对**当前正在运行**的会话（即 `sessions/` 里的那些）。一个进程仍存活、但出错 / 正在重试 / 卡住的会话会被标记；一旦进程退出，它就不再出现在这个列表里（那属于历史会话）。
 
-## Take over a stuck session
+## 接管一个卡住的会话
 
-In the list or detail view, press **`o`** on the selected session to enter a short **takeover wizard**:
+在列表或详情视图中，对选中的会话按 **`o`**，进入一个简短的**接管向导**：
 
-1. **Confirm takeover** — `y` to continue, any other key cancels (to avoid mis-presses);
-2. **Enable `--dangerously-skip-permissions`?** — **default no**: `n` / `enter` skips, `y` enables;
-3. **Name it (`--name`)?** — **default no**: `n` / `enter` skips; pick `y`, type a name, then `enter` to confirm (empty = no name).
+1. **确认接管**——`y` 继续，按其他任意键取消（避免误触）；
+2. **是否启用 `--dangerously-skip-permissions`？**——**默认否**：`n` / `enter` 跳过，`y` 启用；
+3. **是否命名（`--name`）？**——**默认否**：`n` / `enter` 跳过；选 `y`，输入名字，再按 `enter` 确认（空 = 不命名）。
 
-After the wizard, the tool will:
+向导完成后，本工具会：
 
-- Open a new terminal in the session's **directory** (cwd) (macOS = Terminal, Windows = PowerShell);
-- Run `claude [--dangerously-skip-permissions] [--name <name>] '<instruction>'` — starting a **brand-new** Claude session (**without `--resume`**); the switches you chose are appended after `claude`, before the instruction;
-- The instruction is (in Chinese): **「sessionId为xxx的任务卡住了，你帮我看看任务进度现在到哪里了，下一步我该做什么，请你继续执行任务。」** — *"The task with sessionId xxx is stuck. Check where its progress stands, tell me what to do next, and continue the task."* (where `xxx` is the stuck session's sessionId).
+- 在会话的**目录**（cwd）里打开一个新终端（macOS = Terminal，Windows = PowerShell）；
+- 运行 `claude [--dangerously-skip-permissions] [--name <名字>] '<指令>'`——启动一个**全新的** Claude 会话（**不带 `--resume`**）；你选择的开关会追加在 `claude` 之后、指令之前；
+- 指令是：**「sessionId为xxx的任务卡住了，你帮我看看任务进度现在到哪里了，下一步我该做什么，请你继续执行任务。」**（其中 `xxx` 是卡住会话的 sessionId）。
 
-This way a fresh Claude starts in the same project directory, is told which sessionId got stuck, and inspects that session's progress, decides the next step, and continues — typically to rescue a session flagged as abnormal. Because the new session starts with an (almost) empty context, its requests are small and don't hit the same rate-limit / timeout loop that kept the old, long-context session retrying.
+这样一个全新的 Claude 会在同一个项目目录里启动，被告知哪个 sessionId 卡住了，然后去检查那个会话的进度、决定下一步并继续执行——通常用来救援一个被标记为异常的会话。由于新会话以（几乎）空的上下文开始，它的请求很小，不会陷入让旧的、长上下文会话不断重试的那种限流 / 超时循环。
 
-- Press **`esc`** at any wizard step to cancel the whole flow;
-- The command (with your chosen switches) is also **copied to the clipboard**, so if the terminal didn't open you can paste and run it manually;
-- macOS uses Terminal.app (via `osascript`); Windows uses PowerShell (`start powershell`); other systems try a generic terminal.
+- 在向导的任何一步按 **`esc`** 都可取消整个流程；
+- 命令（连同你选择的开关）也会**复制到剪贴板**，万一终端没打开，你可以手动粘贴运行；
+- macOS 用 Terminal.app（通过 `osascript`）；Windows 用 PowerShell（`start powershell`）；其他系统尝试通用终端。
 
-## Keyboard shortcuts
+## 键盘快捷键
 
-| Key | Action |
+| 键 | 操作 |
 | --- | --- |
-| `↑` / `↓` or `j` / `k` | Move selection |
-| `PgUp` / `PgDn` | Previous / next page |
-| `Home` / `End` | Jump to first / last |
-| `Enter` | View session detail |
-| `o` | Take over: open a terminal in the session's dir and rescue it (see above) |
-| `a` | Toggle auto-refresh |
-| `g` | Refresh once |
-| `y` | (in detail view) copy sessionId to clipboard |
-| `/` | Filter by name / sessionId / directory |
-| `s` | Cycle sort: recent → name → directory |
-| `q` / `Esc` | Quit (in filter mode, `Esc` cancels) |
+| `↑` / `↓` 或 `j` / `k` | 移动选择 |
+| `PgUp` / `PgDn` | 上一页 / 下一页 |
+| `Home` / `End` | 跳到第一个 / 最后一个 |
+| `Enter` | 查看会话详情 |
+| `o` | 接管：在会话目录里打开终端并救援它（见上文） |
+| `a` | 切换自动刷新 |
+| `g` | 刷新一次 |
+| `y` | （在详情视图）复制 sessionId 到剪贴板 |
+| `/` | 按名字 / sessionId / 目录过滤 |
+| `s` | 循环排序：最近 → 名字 → 目录 |
+| `q` / `Esc` | 退出（过滤模式下，`Esc` 取消） |
 
-## Non-interactive usage (scripts / pipes)
+## 非交互式用法（脚本 / 管道）
 
-When the output isn't a terminal, or you pass arguments, it prints the result and exits instead of opening the UI:
+当输出不是终端，或你传入参数时，它会打印结果并退出，而不是打开 UI：
 
 ```bash
-node sessions.js --list      # aligned plain-text table (Chinese labels)
-node sessions.js --json      # JSON array with English field names, for scripts
+node sessions.js --list      # 对齐的纯文本表格（中文标签）
+node sessions.js --json      # JSON 数组，英文字段名，供脚本使用
 node sessions.js --json | jq -r '.[] | select(.alive) | .sessionId'
 ```
 
-### Options
+### 选项
 
-| Option | Description |
+| 选项 | 说明 |
 | --- | --- |
-| `-l`, `--list` | Print a plain-text table, then exit |
-| `--json` | Output JSON (for scripts) |
-| `--dir <path>` | Use the given sessions directory |
-| `--no-color` | Disable color (also respects `$NO_COLOR`) |
-| `-h`, `--help` | Show help |
-| `-v`, `--version` | Show version |
+| `-l`, `--list` | 打印纯文本表格，然后退出 |
+| `--json` | 输出 JSON（供脚本使用） |
+| `--dir <路径>` | 使用指定的会话目录 |
+| `--no-color` | 禁用颜色（也遵循 `$NO_COLOR`） |
+| `-h`, `--help` | 显示帮助 |
+| `-v`, `--version` | 显示版本 |
 
-## Notes & caveats
+## 注意事项与说明
 
-- **Liveness detection** uses `process.kill(pid, 0)` — it only probes whether the process exists; it **does not actually signal or kill** it. The OS may reuse PIDs, so in rare cases the judgment can be off; treat it as best-effort.
-- **Windows terminal**: color and the full-screen UI need a VT-capable terminal (Windows Terminal, or `conhost` on Windows 10+, which today's default terminals support). On a very old console, use `--list` / `--json` instead.
+- **存活检测**使用 `process.kill(pid, 0)`——它只探测进程是否存在；**并不真的发送信号或杀死**它。操作系统可能复用 PID，所以极少数情况下判断会出错；请把它当作尽力而为的结果。
+- **Windows 终端**：颜色和全屏 UI 需要一个支持 VT 的终端（Windows Terminal，或 Windows 10+ 上的 `conhost`，如今的默认终端都支持）。在非常老的控制台上，请改用 `--list` / `--json`。
 
-## Acknowledgements
-
-Shared and discussed on the [LINUX DO](https://linux.do) community — thanks to the folks there for the feedback and for hosting open-source sharing.
+## 致谢
 
 本项目在 [LINUX DO](https://linux.do) 社区分享与讨论，感谢社区与各位佬友。
 
-## License
+## 许可证
 
 MIT
