@@ -300,8 +300,10 @@ function humanResumeCommand(sessionId, opts) {
 // 注意: 是 `claude '<prompt>'` 启动新会话,不带 --resume。
 function buildResumeCommand(platform, cwd, sessionId, prompt, opts) {
   if (platform === 'win32') {
-    const ps = `Set-Location -LiteralPath ${psSingleQuote(cwd)}; claude ${resumeFlagsWin(opts)}${psSingleQuote(prompt)}`;
-    return { cmd: 'cmd', args: ['/c', 'start', 'claude-rescue', 'powershell', '-NoExit', '-Command', ps] };
+    const ps = `$Host.UI.RawUI.WindowTitle='claude-rescue'; Set-Location -LiteralPath ${psSingleQuote(cwd)}; claude ${resumeFlagsWin(opts)}${psSingleQuote(prompt)}`;
+    // start 只把带引号的第一个参数当窗口标题,不带引号会被当作命令执行;
+    // 传空串占住标题位(Node 会把空参数序列化成 ""),窗口标题改由上面的 $Host 语句设置。
+    return { cmd: 'cmd', args: ['/c', 'start', '', 'powershell', '-NoExit', '-Command', ps] };
   }
   const inner = `cd ${shellSingleQuote(cwd)} && claude ${resumeFlagsPosix(opts)}${shellSingleQuote(prompt)}`;
   if (platform === 'darwin') {
@@ -320,11 +322,18 @@ function openTerminalAndRun(cwd, sessionId, prompt, opts) {
 
 // 跨平台复制文本到剪贴板。
 function copyText(text) {
-  let cmd, args = [];
+  let cmd, args = [], input = text;
   if (process.platform === 'darwin') cmd = 'pbcopy';
-  else if (process.platform === 'win32') cmd = 'clip';
+  else if (process.platform === 'win32') {
+    // clip.exe 按控制台代码页(中文系统是 GBK)解码 stdin,UTF-8 的非 ASCII 文本会乱码;
+    // 改走 -EncodedCommand(UTF-16LE Base64)调 Set-Clipboard,全程不经过代码页。
+    cmd = 'powershell';
+    const script = 'Set-Clipboard -Value ' + psSingleQuote(text);
+    args = ['-NoProfile', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+    input = undefined;
+  }
   else { cmd = 'xclip'; args = ['-selection', 'clipboard']; }
-  const r = spawnSync(cmd, args, { input: text });
+  const r = spawnSync(cmd, args, { input });
   if (r.error || (r.status !== 0 && r.status != null)) throw r.error || new Error('exit ' + r.status);
   return true;
 }
