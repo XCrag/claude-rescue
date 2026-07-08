@@ -93,12 +93,13 @@ In the list or detail view, press **`o`** on the selected session to enter a sho
 
 1. **Confirm takeover** — `y` to continue, any other key cancels (to avoid mis-presses);
 2. **Enable `--dangerously-skip-permissions`?** — **default no**: `n` / `enter` skips, `y` enables;
-3. **Name it (`--name`)?** — **default no**: `n` / `enter` skips; pick `y`, type a name, then `enter` to confirm (empty = no name).
+3. **Set the thinking effort (`--effort`)?** — **default no**: use `↑`/`↓` (or `←`/`→`) to cycle through `default / low / medium / high / xhigh / max`, press `enter` to confirm the highlighted choice; or press `1`-`5` to jump directly to the corresponding level, or press `n` to keep the default and continue;
+4. **Name it (`--name`)?** — **default no**: `n` / `enter` skips; pick `y`, type a name, then `enter` to confirm (empty = no name).
 
 After the wizard, the tool will:
 
 - Open a new terminal in the session's **directory** (cwd) (macOS = Terminal, Windows = PowerShell);
-- Run `claude [--dangerously-skip-permissions] [--name <name>] '<instruction>'` — starting a **brand-new** Claude session (**without `--resume`**); the switches you chose are appended after `claude`, before the instruction;
+- Run `claude [--dangerously-skip-permissions] [--effort <level>] [--name <name>] '<instruction>'` — starting a **brand-new** Claude session (**without `--resume`**); the switches you chose are appended after `claude`, before the instruction;
 - The instruction is (in Chinese): **「sessionId为xxx的任务卡住了，你帮我看看任务进度现在到哪里了，下一步我该做什么，请你继续执行任务。」** — *"The task with sessionId xxx is stuck. Check where its progress stands, tell me what to do next, and continue the task."* (where `xxx` is the stuck session's sessionId).
 
 This way a fresh Claude starts in the same project directory, is told which sessionId got stuck, and inspects that session's progress, decides the next step, and continues — typically to rescue a session flagged as abnormal. Because the new session starts with an (almost) empty context, its requests are small and don't hit the same rate-limit / timeout loop that kept the old, long-context session retrying.
