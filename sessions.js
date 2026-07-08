@@ -274,19 +274,26 @@ function shellSingleQuote(s) { return "'" + String(s).replace(/'/g, "'\\''") + "
 function appleStringLiteral(s) { return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
 function psSingleQuote(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
 
+// claude CLI --effort 支持的思考强度档位,从低到高(向导里按 1-5 选择)。
+// 同时充当安全白名单: 只有列表内的值才会拼进 shell 命令,其余一律忽略。
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
 // 接管时可选的命令行开关:
 //   opts.skipPermissions -> 拼接 --dangerously-skip-permissions
+//   opts.effort          -> 拼接 --effort <档位>(仅接受 EFFORT_LEVELS 内的值)
 //   opts.name            -> 拼接 --name <名字>
 // 开关放在 prompt 之前,符合 CLI 习惯。返回带尾随空格的片段(无开关时为空串)。
 function resumeFlagsPosix(opts) {
   const f = [];
   if (opts && opts.skipPermissions) f.push('--dangerously-skip-permissions');
+  if (opts && EFFORT_LEVELS.includes(opts.effort)) f.push('--effort ' + opts.effort);
   if (opts && opts.name) f.push('--name ' + shellSingleQuote(opts.name));
   return f.length ? f.join(' ') + ' ' : '';
 }
 function resumeFlagsWin(opts) {
   const f = [];
   if (opts && opts.skipPermissions) f.push('--dangerously-skip-permissions');
+  if (opts && EFFORT_LEVELS.includes(opts.effort)) f.push('--effort ' + opts.effort);
   if (opts && opts.name) f.push('--name ' + psSingleQuote(opts.name));
   return f.length ? f.join(' ') + ' ' : '';
 }
@@ -300,8 +307,10 @@ function humanResumeCommand(sessionId, opts) {
 // 注意: 是 `claude '<prompt>'` 启动新会话,不带 --resume。
 function buildResumeCommand(platform, cwd, sessionId, prompt, opts) {
   if (platform === 'win32') {
-    const ps = `Set-Location -LiteralPath ${psSingleQuote(cwd)}; claude ${resumeFlagsWin(opts)}${psSingleQuote(prompt)}`;
-    return { cmd: 'cmd', args: ['/c', 'start', 'claude-rescue', 'powershell', '-NoExit', '-Command', ps] };
+    const ps = `$Host.UI.RawUI.WindowTitle='claude-rescue'; Set-Location -LiteralPath ${psSingleQuote(cwd)}; claude ${resumeFlagsWin(opts)}${psSingleQuote(prompt)}`;
+    // start 只把带引号的第一个参数当窗口标题,不带引号会被当作命令执行;
+    // 传空串占住标题位(Node 会把空参数序列化成 ""),窗口标题改由上面的 $Host 语句设置。
+    return { cmd: 'cmd', args: ['/c', 'start', '', 'powershell', '-NoExit', '-Command', ps] };
   }
   const inner = `cd ${shellSingleQuote(cwd)} && claude ${resumeFlagsPosix(opts)}${shellSingleQuote(prompt)}`;
   if (platform === 'darwin') {
@@ -320,11 +329,18 @@ function openTerminalAndRun(cwd, sessionId, prompt, opts) {
 
 // 跨平台复制文本到剪贴板。
 function copyText(text) {
-  let cmd, args = [];
+  let cmd, args = [], input = text;
   if (process.platform === 'darwin') cmd = 'pbcopy';
-  else if (process.platform === 'win32') cmd = 'clip';
+  else if (process.platform === 'win32') {
+    // clip.exe 按控制台代码页(中文系统是 GBK)解码 stdin,UTF-8 的非 ASCII 文本会乱码;
+    // 改走 -EncodedCommand(UTF-16LE Base64)调 Set-Clipboard,全程不经过代码页。
+    cmd = 'powershell';
+    const script = 'Set-Clipboard -Value ' + psSingleQuote(text);
+    args = ['-NoProfile', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+    input = undefined;
+  }
   else { cmd = 'xclip'; args = ['-selection', 'clipboard']; }
-  const r = spawnSync(cmd, args, { input: text });
+  const r = spawnSync(cmd, args, { input });
   if (r.error || (r.status !== 0 && r.status != null)) throw r.error || new Error('exit ' + r.status);
   return true;
 }
@@ -552,7 +568,7 @@ class App {
     this.mode = 'list';       // list | detail | search | resume
     this.message = '';
     this.search = '';
-    this.resume = null;       // 接管向导状态: { s, where, step, skipPermissions, name }
+    this.resume = null;       // 接管向导状态: { s, where, step, skipPermissions, effortIdx, name }
     this.resumeAfter = 'list';// 接管完成 / 取消后返回的视图
     this.autoRefresh = true;  // 定时重读会话目录
     this.refreshMs = 2000;
@@ -619,7 +635,7 @@ class App {
   }
 
   // 接管: 在会话目录下打开终端,启动一个新的 Claude 处理卡住的会话。
-  // 多步向导: 确认 -> 是否跳过权限 -> 是否命名 -> (输入名字) -> 执行。
+  // 多步向导: 确认 -> 是否跳过权限 -> 思考强度 -> 是否命名 -> (输入名字) -> 执行。
   startResume() {
     const s = this.current();
     if (!s || !s.sessionId) { this.message = '当前会话没有 sessionId,无法接管'; return; }
@@ -627,8 +643,9 @@ class App {
     this.resume = {
       s,
       where: s.cwd || '(未知目录)',
-      step: 'confirm',                     // confirm | skipPerm | askName | inputName
+      step: 'confirm',                     // confirm | skipPerm | askEffort | askName | inputName
       skipPermissions: false,
+      effortIdx: 0,                        // 0 = 默认(不指定), 1..n = EFFORT_LEVELS[idx-1]
       name: '',
     };
     this.mode = 'resume';
@@ -648,8 +665,15 @@ class App {
         else this.cancelResume();
         break;
       case 'skipPerm':                     // 是否 --dangerously-skip-permissions,默认否
-        if (c === 'y' || c === 'Y') { f.skipPermissions = true; f.step = 'askName'; }
-        else if (c === 'n' || c === 'N' || k.name === 'enter') { f.skipPermissions = false; f.step = 'askName'; }
+        if (c === 'y' || c === 'Y') { f.skipPermissions = true; f.step = 'askEffort'; }
+        else if (c === 'n' || c === 'N' || k.name === 'enter') { f.skipPermissions = false; f.step = 'askEffort'; }
+        break;
+      case 'askEffort':                    // 思考强度(--effort): ↑↓/←→ 移动选档,enter 确定;1-5 直选,n 保持默认并继续
+        if (k.name === 'up' || k.name === 'left') f.effortIdx = (f.effortIdx + EFFORT_LEVELS.length) % (EFFORT_LEVELS.length + 1);
+        else if (k.name === 'down' || k.name === 'right') f.effortIdx = (f.effortIdx + 1) % (EFFORT_LEVELS.length + 1);
+        else if (c && c.length === 1 && c >= '1' && c <= String(EFFORT_LEVELS.length)) { f.effortIdx = Number(c); f.step = 'askName'; }
+        else if (c === 'n' || c === 'N') { f.effortIdx = 0; f.step = 'askName'; }
+        else if (k.name === 'enter') f.step = 'askName';
         break;
       case 'askName':                      // 是否命名(--name),默认否
         if (c === 'y' || c === 'Y') f.step = 'inputName';
@@ -673,7 +697,7 @@ class App {
     const f = this.resume;
     this.mode = this.resumeAfter || 'list';
     this.resume = null;
-    if (f) this.launchResume(f.s, { skipPermissions: f.skipPermissions, name: f.name.trim() });
+    if (f) this.launchResume(f.s, { skipPermissions: f.skipPermissions, effort: f.effortIdx > 0 ? EFFORT_LEVELS[f.effortIdx - 1] : '', name: f.name.trim() });
   }
 
   launchResume(s, opts) {
@@ -685,6 +709,7 @@ class App {
     try { copied = copyText(humanResumeCommand(s.sessionId, opts)); } catch { copied = false; }
     const extra = [];
     if (opts.skipPermissions) extra.push('跳过权限');
+    if (opts.effort) extra.push('强度:' + opts.effort);
     if (opts.name) extra.push('名字:' + opts.name);
     const suffix = extra.length ? ' [' + extra.join(' · ') + ']' : '';
     this.message = opened
@@ -878,6 +903,7 @@ class App {
     switch (f.step) {
       case 'confirm':   return 'y 确认接管 · 其它键取消';
       case 'skipPerm':  return 'y 开启 · n/enter 默认否 · esc 取消';
+      case 'askEffort': return '↑↓/←→ 移动 · enter 确认 · 1-5 直选 · n 默认 · esc 取消';
       case 'askName':   return 'y 命名 · n/enter 默认否 · esc 取消';
       case 'inputName': return '输入名字 · enter 确定 · esc 取消';
     }
@@ -891,6 +917,15 @@ class App {
     const id = (f.s.sessionId || '').slice(0, 8);
     if (f.step === 'inputName') {
       return C.bold(' 会话名字(--name): ') + truncEnd(f.name, Math.max(1, cols - 20)) + '▏';
+    }
+    if (f.step === 'askEffort') {
+      const items = ['默认', ...EFFORT_LEVELS];
+      let sel = '';
+      for (let i = 0; i < items.length; i++) {
+        const label = i === 0 ? '默认' : items[i];
+        sel += i === f.effortIdx ? C.inv(' ' + label + ' ') : C.dim(' ' + label + ' ');
+      }
+      return C.yellow(' 新会话思考强度(--effort):') + sel;
     }
     let q;
     if (f.step === 'confirm') q = `在 ${f.where} 打开终端,启动 Claude 处理卡住的会话 ${id}?`;
@@ -958,7 +993,7 @@ function help() {
 
 界面快捷键
   ↑/↓ 或 j/k   移动           enter   详情
-  PgUp/PgDn    翻页           o       接管(开终端启动新会话,可选跳过权限/命名)
+  PgUp/PgDn    翻页           o       接管(开终端启动新会话,可选跳过权限/思考强度/命名)
   Home/End     跳到首/末      a       开关自动刷新
   /            过滤           g       立即刷新一次
   s            切换排序       y       (详情页)复制 sessionId
@@ -1007,6 +1042,6 @@ module.exports = {
   VERSION, expandHome, getConfigDir, getSessionsDir, isAlive,
   loadSessions, sortSessions, relTime, sortLabel, statusLabel,
   findTranscript, detectAbnormal, annotateSessions, abnormalLabel,
-  resumePrompt, humanResumeCommand, buildResumeCommand,
+  resumePrompt, humanResumeCommand, buildResumeCommand, EFFORT_LEVELS,
   parseKey, tokenizeKeys, App,
 };
