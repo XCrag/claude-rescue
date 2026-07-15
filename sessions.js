@@ -209,19 +209,18 @@ function readTailLines(file, maxBytes) {
   } finally { fs.closeSync(fd); }
 }
 
-// 会话异常分三种(kind): 'retrying'(正在 API 重试) / 'error'(已报错) / 'slow'(进程活着但长时间无响应)。
-// 下面这些是非对话的元数据记录,判断"最后一条 / 最近几条实质记录"时要先跳过它们。
+// 会话异常只保留两种明确的 API 状态:
+// 'retrying'(正在 API 重试) / 'error'(已收到 API 错误)。
+// 非对话元数据不会创建或清除异常。
 const META_TYPES = new Set([
   'mode', 'permission-mode', 'file-history-snapshot', 'attachment',
   'ai-title', 'last-prompt', 'custom-title', 'agent-name',
 ]);
-const SLOW_MS = 5 * 60 * 1000; // 进程活着、但记录文件超过这个时长没更新 -> 无响应
 
 // kind -> 状态列短标签(<= 3 个汉字,放得进 6 格宽的状态列)。
 function abnormalLabel(kind) {
   return kind === 'retrying' ? '重试中'
-    : kind === 'error' ? '错误'
-      : kind === 'slow' ? '无响应' : '';
+    : kind === 'error' ? '错误' : '';
 }
 
 // 由一条 system/api_error 记录拼出重试原因,如 "重试 3/10 · 520"。
@@ -248,30 +247,28 @@ function errorReason(o) {
   return [status, title].filter(Boolean).join(' · ') || 'API 错误';
 }
 
-// 只看 transcript 内容能判定的两种状态(retrying / error);
-// 'slow' 依赖实时时间,在 annotateSessions 里叠加,不进缓存。
 function detectAbnormalUncached(file) {
   let lines;
   try { lines = readTailLines(file, 262144); } catch { return { kind: 'ok', reason: null }; }
-  // 解析并滤掉非对话的元数据记录,只留实质记录(user / assistant / system 等)。
   const essential = [];
   for (const l of lines) {
     let o; try { o = JSON.parse(l); } catch { continue; }
     if (!o || !o.type || META_TYPES.has(o.type)) continue;
     essential.push(o);
   }
-  if (!essential.length) return { kind: 'ok', reason: null };
-  // 1) 最后一条实质记录是 system/api_error -> 正在重试。
-  const last = essential[essential.length - 1];
-  if (last.type === 'system' && last.subtype === 'api_error') {
-    return { kind: 'retrying', reason: retryReason(last) };
-  }
-  // 2) 最近 3 条实质记录里有 assistant 的 API 错误消息 -> 已报错
-  //    (错误消息后面常跟着 turn_duration / user 等,所以不只看最后一条)。
-  for (const o of essential.slice(-3)) {
-    if (o.type === 'assistant' && o.isApiErrorMessage === true) {
+
+  // 从新到旧寻找最近一个能明确 API 状态的记录。
+  // user / tool_result / turn_duration 等记录既不创建异常,也不清除异常。
+  for (let i = essential.length - 1; i >= 0; i--) {
+    const o = essential[i];
+    if (o.type === 'system' && o.subtype === 'api_error') {
+      return { kind: 'retrying', reason: retryReason(o) };
+    }
+    if (o.type !== 'assistant') continue;
+    if (o.isApiErrorMessage === true) {
       return { kind: 'error', reason: errorReason(o) };
     }
+    return { kind: 'ok', reason: null };
   }
   return { kind: 'ok', reason: null };
 }
@@ -286,20 +283,15 @@ function detectAbnormal(file) {
   return result;
 }
 
-// 给每个会话标注 transcript 路径与异常状态:
-//   s.abnormalKind   'ok' | 'retrying' | 'error' | 'slow'
+// 给每个会话标注 transcript 路径与当前 API 异常状态:
+//   s.abnormalKind   'ok' | 'retrying' | 'error'
 //   s.abnormal       兼容旧用法的布尔(= kind !== 'ok')
-//   s.abnormalReason 详情文案(重试次数 / 状态码 / 无响应时长等)
+//   s.abnormalReason 详情文案(重试次数 / 状态码等)
 function annotateSessions(sessions, sessionsDir) {
   const projectsDir = path.join(path.dirname(sessionsDir), 'projects');
-  const now = Date.now();
   for (const s of sessions) {
     s.transcript = findTranscript(s.sessionId, s.cwd, projectsDir);
-    let r = s.transcript ? detectAbnormal(s.transcript) : { kind: 'ok', reason: null };
-    // 时间维度(实时,不进缓存): 内容正常、但进程活着且记录文件长时间没更新 -> 无响应。
-    if (r.kind === 'ok' && s.alive && s.updatedAt && (now - s.updatedAt > SLOW_MS)) {
-      r = { kind: 'slow', reason: '无响应 ' + Math.floor((now - s.updatedAt) / 60000) + ' 分钟' };
-    }
+    const r = s.transcript ? detectAbnormal(s.transcript) : { kind: 'ok', reason: null };
     s.abnormalKind = r.kind;
     s.abnormal = r.kind !== 'ok';
     s.abnormalReason = r.reason || null;
