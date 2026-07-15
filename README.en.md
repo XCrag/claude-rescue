@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-A **zero-dependency** terminal tool that **watches** your running **Claude Code** sessions in real time, flags the stuck ones, and **takes them over to rescue them** with one keypress. Behaves identically on **macOS / Windows / Linux**.
+A **zero-dependency** terminal tool that **watches** your running **Claude Code** sessions in real time, flags explicit API retries and errors, and continues the work in a new terminal with one keypress. Behaves identically on **macOS / Windows / Linux**.
 
 Every running Claude Code session writes a small JSON file at `~/.claude/sessions/<pid>.json`. This tool reads that directory and presents an interactive UI (TUI) listing each session's **sessionId, name, directory, status, and last-activity time**, **auto-refreshing every few seconds** so you can see at a glance which sessions are running and which are busy or idle.
 
@@ -69,25 +69,23 @@ The sessions directory is located automatically, with identical logic on every O
 
 ## Anomaly monitoring
 
-The tool also reads the **tail** of each session's **transcript** (`~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`), skips the metadata records, looks only at substantive conversation, and classifies session health into three states:
+The tool reads the **tail** of each session transcript (`~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`) and flags a session only when its latest decisive API state is an explicit retry or error:
 
 | State | Color | Criterion | Example detail |
 | --- | --- | --- | --- |
-| **Retrying** (`重试中`) | Yellow | The last substantive record is an API retry (`system/api_error`) — the tool is auto-retrying | `重试 3/10 · 520` |
-| **Error** (`错误`) | Red | One of the last 3 substantive records is an API-error assistant message (`isApiErrorMessage`) | `524 · Error 524: A timeout occurred` |
-| **Unresponsive** (`无响应`) | Yellow | The process is alive, but the session hasn't updated for **over 5 minutes** (likely stuck, or waiting on a very long response) | `无响应 8 分钟` |
+| **Retrying** (`重试中`) | Yellow | The latest decisive API state is `system/api_error` | `重试 3/10 · 520` |
+| **Error** (`错误`) | Red | The latest decisive API state is an assistant `isApiErrorMessage` record | `524 · Error 524: A timeout occurred` |
 
-- All three appear in the **status column** in their color (error = red, retrying/unresponsive = yellow), and the leading dot changes color to match;
-- The title bar shows the anomaly count (e.g. `· 2 异常`), counting all three states;
-- The **detail view** shows the specific reason (status code, retry count, unresponsive duration, etc.);
-- In the filter (`/`), type `异常` (anomaly), or `重试` / `错误` / `无响应`, to filter the matching sessions;
-- The `--json` output includes `abnormal` (boolean), `abnormalKind` (`ok` / `retrying` / `error` / `slow`), and `abnormalReason` fields, handy for scripted monitoring.
+- Only these explicit API states count as anomalies; idle time, inactivity, tool execution, and permission waits never trigger alerts.
+- A newer normal assistant response immediately clears an earlier retry or error.
+- In the filter (`/`), type `异常` (anomaly), `重试` (retry), or `错误` (error) to filter matching sessions.
+- `abnormalKind` in `--json` output is limited to `ok`, `retrying`, and `error`.
 
-For performance it reads only a **small tail** of the transcript: "retrying / error" are cached by file mtime, while "unresponsive" is judged live by time on each pass. So even a huge transcript stays fast.
+Results are cached by transcript mtime and size, and only the file tail is read, so large transcripts remain fast.
 
-> Note: detection targets **currently running** sessions (those in `sessions/`). A session that errored / is retrying / is stuck while its process is still alive gets flagged; once the process has exited, it's no longer in this list (that's a historical session).
+> Note: detection targets **currently running** sessions (those in `sessions/`). Only explicit API errors or retries are flagged; once a process exits, it is no longer in this list (that is a historical session).
 
-## Take over a stuck session
+## Continue a session in a new terminal
 
 In the list or detail view, press **`o`** on the selected session to enter a short **takeover wizard**:
 
@@ -99,9 +97,9 @@ After the wizard, the tool will:
 
 - Open a new terminal in the session's **directory** (cwd);
 - Run `claude [--dangerously-skip-permissions] [--name <name>] '<instruction>'` — starting a **brand-new** Claude session (**without `--resume`**); the switches you chose are appended after `claude`, before the instruction;
-- The instruction is (in Chinese): **「sessionId为xxx的任务卡住了，你帮我看看任务进度现在到哪里了，下一步我该做什么，请你继续执行任务。」** — *"The task with sessionId xxx is stuck. Check where its progress stands, tell me what to do next, and continue the task."* (where `xxx` is the stuck session's sessionId).
+- The instruction is (in Chinese): **「sessionId为xxx的任务需要接续处理，请你查看任务进度现在到哪里了，说明下一步，并继续执行任务。」** — *"The task with sessionId xxx needs to be continued. Check its current progress, explain the next step, and continue the work."* (where `xxx` is the selected session's sessionId).
 
-This way a fresh Claude starts in the same project directory, is told which sessionId got stuck, and inspects that session's progress, decides the next step, and continues — typically to rescue a session flagged as abnormal. Because the new session starts with an (almost) empty context, its requests are small and don't hit the same rate-limit / timeout loop that kept the old, long-context session retrying.
+This way a fresh Claude starts in the same project directory, inspects the selected session's progress, decides the next step, and continues — commonly after an explicit API retry or error. Because the new session starts with an (almost) empty context, its requests are small and don't hit the same rate-limit / timeout loop that kept the old, long-context session retrying.
 
 - Press **`esc`** at any wizard step to cancel the whole flow;
 - The command (with your chosen switches) is also **copied to the clipboard**, so if the terminal didn't open you can paste and run it manually;

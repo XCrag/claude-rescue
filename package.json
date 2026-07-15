@@ -1,7 +1,7 @@
 {
   "name": "claude-rescue",
   "version": "1.0.0",
-  "description": "Live cross-platform TUI to watch running Claude Code sessions, flag the stuck ones, and take them over to rescue them. Zero dependencies.",
+  "description": "Live cross-platform TUI to watch Claude Code sessions, flag explicit API retries and errors, and continue work in a new session. Zero dependencies.",
   "bin": {
     "claude-rescue": "sessions.js"
   },

@@ -305,7 +305,7 @@ function annotateSessions(sessions, sessionsDir) {
 
 // 接管时发给新起会话的指令(用户指定的话术)。
 function resumePrompt(sessionId) {
-  return `sessionId为${sessionId}的任务卡住了，你帮我看看任务进度现在到哪里了，下一步我该做什么，请你继续执行任务。`;
+  return `sessionId为${sessionId}的任务需要接续处理，请你查看任务进度现在到哪里了，说明下一步，并继续执行任务。`;
 }
 
 function shellSingleQuote(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
@@ -471,7 +471,7 @@ function humanResumeCommand(sessionId, opts) {
   return `claude ${resumeFlagsPosix(opts)}${shellSingleQuote(resumePrompt(sessionId))}`;
 }
 
-// 构造"在 cwd 下开终端并启动 Claude(prompt 里带上卡住的 sessionId)"的进程命令。
+// 构造"在 cwd 下开终端并启动 Claude(prompt 里带上待接续 sessionId)"的进程命令。
 // 注意: 是 `claude '<prompt>'` 启动新会话,不带 --resume。
 function buildResumeCommand(platform, cwd, sessionId, prompt, opts) {
   opts = opts || {};
@@ -820,7 +820,7 @@ class App {
     catch { this.message = '复制失败(系统没有可用的剪贴板命令)'; }
   }
 
-  // 接管: 在会话目录下打开终端,启动一个新的 Claude 处理卡住的会话。
+  // 接管: 在会话目录下打开终端,启动一个新的 Claude 接续处理会话。
   // 多步向导: 确认 -> 是否跳过权限 -> 是否命名 -> (输入名字) -> 执行。
   startResume() {
     const s = this.current();
@@ -1165,7 +1165,7 @@ class App {
       return C.bold(' 自定义模板: ') + truncEnd(f.terminalCommand, Math.max(1, cols - 14)) + '▏';
     }
     let q;
-    if (f.step === 'confirm') q = `在 ${f.where} 打开终端,启动 Claude 处理卡住的会话 ${id}?`;
+    if (f.step === 'confirm') q = `在 ${f.where} 打开终端,启动 Claude 接续处理会话 ${id}?`;
     else if (f.step === 'skipPerm') q = '是否开启 --dangerously-skip-permissions(跳过权限确认)?';
     else q = '是否给新会话命名(--name)?';
     return C.yellow(truncEnd(' ' + q + ' (y/N)', cols));
