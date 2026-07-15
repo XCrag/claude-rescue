@@ -97,7 +97,7 @@ In the list or detail view, press **`o`** on the selected session to enter a sho
 
 After the wizard, the tool will:
 
-- Open a new terminal in the session's **directory** (cwd) (macOS = Terminal, Windows = PowerShell);
+- Open a new terminal in the session's **directory** (cwd);
 - Run `claude [--dangerously-skip-permissions] [--name <name>] '<instruction>'` — starting a **brand-new** Claude session (**without `--resume`**); the switches you chose are appended after `claude`, before the instruction;
 - The instruction is (in Chinese): **「sessionId为xxx的任务卡住了，你帮我看看任务进度现在到哪里了，下一步我该做什么，请你继续执行任务。」** — *"The task with sessionId xxx is stuck. Check where its progress stands, tell me what to do next, and continue the task."* (where `xxx` is the stuck session's sessionId).
 
@@ -105,7 +105,63 @@ This way a fresh Claude starts in the same project directory, is told which sess
 
 - Press **`esc`** at any wizard step to cancel the whole flow;
 - The command (with your chosen switches) is also **copied to the clipboard**, so if the terminal didn't open you can paste and run it manually;
-- macOS uses Terminal.app (via `osascript`); Windows uses PowerShell (`start powershell`); other systems try a generic terminal.
+- If no takeover terminal has been configured yet, the first real takeover asks you to choose one and saves it to `~/.claude-rescue/config.json`.
+
+### Takeover terminal configuration
+
+Terminal selection is explicit. The tool does not auto-guess.
+
+Priority:
+
+1. CLI option: `--terminal <id>`
+2. Environment variable: `CLAUDE_RESCUE_TERMINAL=<id>`
+3. Config file: `~/.claude-rescue/config.json`
+4. If none exists, ask on the first `o` takeover and save the answer
+
+Available terminal ids:
+
+| System | Terminal ids |
+| --- | --- |
+| macOS | `terminal`, `iterm2`, `custom` |
+| Windows | `powershell`, `windows-terminal`, `custom` |
+| Linux | `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `kitty`, `wezterm`, `alacritty`, `custom` |
+
+Reconfigure:
+
+```bash
+claude-rescue --configure-terminal
+```
+
+Temporary override:
+
+```bash
+claude-rescue --terminal iterm2
+CLAUDE_RESCUE_TERMINAL=wezterm claude-rescue
+```
+
+Custom terminal templates are for advanced users. They must include `{command}` and may include `{cwd}`:
+
+```bash
+claude-rescue --terminal custom \
+  --terminal-command "wezterm start --cwd {cwd} -- bash -lc {command}"
+```
+
+Config example:
+
+```json
+{
+  "terminal": "iterm2"
+}
+```
+
+Custom template example:
+
+```json
+{
+  "terminal": "custom",
+  "terminalCommand": "kitty --directory {cwd} bash -lc {command}"
+}
+```
 
 ## Keyboard shortcuts
 
@@ -140,6 +196,9 @@ node sessions.js --json | jq -r '.[] | select(.alive) | .sessionId'
 | `-l`, `--list` | Print a plain-text table, then exit |
 | `--json` | Output JSON (for scripts) |
 | `--dir <path>` | Use the given sessions directory |
+| `--terminal <id>` | Temporarily choose the takeover terminal |
+| `--terminal-command <template>` | Custom template used with `--terminal custom` |
+| `--configure-terminal` | Reconfigure and save the takeover terminal |
 | `--no-color` | Disable color (also respects `$NO_COLOR`) |
 | `-h`, `--help` | Show help |
 | `-v`, `--version` | Show version |

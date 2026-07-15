@@ -95,7 +95,7 @@ claude-rescue
 
 向导完成后，本工具会：
 
-- 在会话的**目录**（cwd）里打开一个新终端（macOS = Terminal，Windows = PowerShell）；
+- 在会话的**目录**（cwd）里打开一个新终端；
 - 运行 `claude [--dangerously-skip-permissions] [--name <名字>] '<指令>'`——启动一个**全新的** Claude 会话（**不带 `--resume`**）；你选择的开关会追加在 `claude` 之后、指令之前；
 - 指令是：**「sessionId为xxx的任务卡住了，你帮我看看任务进度现在到哪里了，下一步我该做什么，请你继续执行任务。」**（其中 `xxx` 是卡住会话的 sessionId）。
 
@@ -103,7 +103,61 @@ claude-rescue
 
 - 在向导的任何一步按 **`esc`** 都可取消整个流程；
 - 命令（连同你选择的开关）也会**复制到剪贴板**，万一终端没打开，你可以手动粘贴运行；
-- macOS 用 Terminal.app（通过 `osascript`）；Windows 用 PowerShell（`start powershell`）；其他系统尝试通用终端。
+- 如果还没有配置过接管终端，第一次真正接管时会询问并保存到 `~/.claude-rescue/config.json`。
+
+### 接管终端配置
+
+终端选择遵循明确优先级，不做自动猜测：
+
+1. 命令行参数：`--terminal <id>`
+2. 环境变量：`CLAUDE_RESCUE_TERMINAL=<id>`
+3. 配置文件：`~/.claude-rescue/config.json`
+4. 如果都没有，在第一次按 `o` 接管时询问并保存
+
+可用终端：
+
+| 系统 | 终端 id |
+| --- | --- |
+| macOS | `terminal`, `iterm2`, `custom` |
+| Windows | `powershell`, `windows-terminal`, `custom` |
+| Linux | `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `kitty`, `wezterm`, `alacritty`, `custom` |
+
+重新选择：
+
+```bash
+claude-rescue --configure-terminal
+```
+
+临时覆盖：
+
+```bash
+claude-rescue --terminal iterm2
+CLAUDE_RESCUE_TERMINAL=wezterm claude-rescue
+```
+
+自定义终端模板适合高级用户，必须包含 `{command}`，可选 `{cwd}`：
+
+```bash
+claude-rescue --terminal custom \
+  --terminal-command "wezterm start --cwd {cwd} -- bash -lc {command}"
+```
+
+配置文件示例：
+
+```json
+{
+  "terminal": "iterm2"
+}
+```
+
+自定义模板示例：
+
+```json
+{
+  "terminal": "custom",
+  "terminalCommand": "kitty --directory {cwd} bash -lc {command}"
+}
+```
 
 ## 键盘快捷键
 
@@ -138,6 +192,9 @@ node sessions.js --json | jq -r '.[] | select(.alive) | .sessionId'
 | `-l`, `--list` | 打印纯文本表格，然后退出 |
 | `--json` | 输出 JSON（供脚本使用） |
 | `--dir <路径>` | 使用指定的会话目录 |
+| `--terminal <id>` | 临时指定接管时使用的终端 |
+| `--terminal-command <模板>` | `--terminal custom` 时使用的自定义模板 |
+| `--configure-terminal` | 重新选择并保存接管终端 |
 | `--no-color` | 禁用颜色（也遵循 `$NO_COLOR`） |
 | `-h`, `--help` | 显示帮助 |
 | `-v`, `--version` | 显示版本 |

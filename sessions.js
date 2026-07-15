@@ -21,6 +21,31 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const VERSION = '1.0.0';
+const TOOL_CONFIG_DIR = path.join(os.homedir(), '.claude-rescue');
+const TOOL_CONFIG_FILE = path.join(TOOL_CONFIG_DIR, 'config.json');
+
+const TERMINAL_CHOICES = {
+  darwin: [
+    { id: 'terminal', label: 'Terminal.app' },
+    { id: 'iterm2', label: 'iTerm2' },
+    { id: 'custom', label: '自定义命令模板' },
+  ],
+  win32: [
+    { id: 'powershell', label: 'PowerShell' },
+    { id: 'windows-terminal', label: 'Windows Terminal' },
+    { id: 'custom', label: '自定义命令模板' },
+  ],
+  linux: [
+    { id: 'x-terminal-emulator', label: 'x-terminal-emulator' },
+    { id: 'gnome-terminal', label: 'GNOME Terminal' },
+    { id: 'konsole', label: 'Konsole' },
+    { id: 'xfce4-terminal', label: 'Xfce Terminal' },
+    { id: 'kitty', label: 'kitty' },
+    { id: 'wezterm', label: 'WezTerm' },
+    { id: 'alacritty', label: 'Alacritty' },
+    { id: 'custom', label: '自定义命令模板' },
+  ],
+};
 
 /* ================================================================== *
  * Paths
@@ -41,6 +66,27 @@ function getConfigDir() {
 
 function getSessionsDir() {
   return path.join(getConfigDir(), 'sessions');
+}
+
+function getToolConfigFile() {
+  return TOOL_CONFIG_FILE;
+}
+
+function readToolConfig(file) {
+  const p = file || getToolConfigFile();
+  try {
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return {};
+    throw e;
+  }
+}
+
+function saveToolConfig(config, file) {
+  const p = file || getToolConfigFile();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(config, null, 2) + '\n');
 }
 
 /* ================================================================== *
@@ -291,6 +337,143 @@ function resumeFlagsWin(opts) {
   return f.length ? f.join(' ') + ' ' : '';
 }
 
+function platformKey(platform) {
+  if (platform === 'darwin' || platform === 'win32') return platform;
+  return 'linux';
+}
+
+function validTerminalIds(platform) {
+  return new Set((TERMINAL_CHOICES[platformKey(platform)] || TERMINAL_CHOICES.linux).map((x) => x.id));
+}
+
+function defaultTerminalForPlatform(platform) {
+  if (platform === 'darwin') return 'terminal';
+  if (platform === 'win32') return 'powershell';
+  return 'x-terminal-emulator';
+}
+
+function normalizeTerminalConfig(input) {
+  input = input || {};
+  const platform = input.platform || process.platform;
+  const terminal = String(input.terminal || '').trim() || defaultTerminalForPlatform(platform);
+  if (!validTerminalIds(platform).has(terminal)) {
+    throw new Error('unsupported terminal: ' + terminal);
+  }
+  const terminalCommand = input.terminalCommand && String(input.terminalCommand).trim() ? String(input.terminalCommand).trim() : null;
+  if (terminal === 'custom' && !terminalCommand) {
+    throw new Error('custom terminal requires terminalCommand');
+  }
+  if (terminal === 'custom' && !terminalCommand.includes('{command}')) {
+    throw new Error('custom terminal command must include {command}');
+  }
+  return { terminal, terminalCommand };
+}
+
+function resolveTerminalConfig(ctx) {
+  ctx = ctx || {};
+  const platform = ctx.platform || process.platform;
+  const candidates = [
+    ['cli', ctx.cli || {}],
+    ['env', {
+      terminal: ctx.env && ctx.env.CLAUDE_RESCUE_TERMINAL,
+      terminalCommand: ctx.env && ctx.env.CLAUDE_RESCUE_TERMINAL_COMMAND,
+    }],
+    ['config', ctx.fileConfig || {}],
+  ];
+  for (const [source, raw] of candidates) {
+    if (!raw || !raw.terminal) continue;
+    const normalized = normalizeTerminalConfig({ ...raw, platform });
+    return { terminal: normalized.terminal, terminalCommand: normalized.terminalCommand, source };
+  }
+  return null;
+}
+
+function shellWords(s) {
+  const words = [];
+  let cur = '', quote = null, esc = false;
+  for (const ch of String(s)) {
+    if (esc) { cur += ch; esc = false; continue; }
+    if (ch === '\\') { esc = true; continue; }
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (/\s/.test(ch)) {
+      if (cur) { words.push(cur); cur = ''; }
+      continue;
+    }
+    cur += ch;
+  }
+  if (esc) cur += '\\';
+  if (quote) throw new Error('unterminated quote in terminal command');
+  if (cur) words.push(cur);
+  return words;
+}
+
+function buildCustomTerminalCommand(template, cwd, command) {
+  const words = shellWords(template);
+  if (!words.length) throw new Error('custom terminal command is empty');
+  const expanded = words.map((w) => w.replace(/\{cwd\}/g, cwd).replace(/\{command\}/g, command));
+  return { cmd: expanded[0], args: expanded.slice(1) };
+}
+
+function commandExists(cmd) {
+  const probe = process.platform === 'win32' ? 'where' : 'which';
+  const r = spawnSync(probe, [cmd], { stdio: 'ignore' });
+  return !r.error && r.status === 0;
+}
+
+function terminalChoicesForPlatform(platform) {
+  const key = platformKey(platform);
+  const choices = TERMINAL_CHOICES[key] || TERMINAL_CHOICES.linux;
+  if (key !== 'linux') return choices.slice();
+  const detected = choices.filter((c) => c.id === 'custom' || commandExists(c.id));
+  return detected.length > 1 ? detected : choices.filter((c) => c.id === 'custom' || c.id === 'x-terminal-emulator');
+}
+
+function terminalLabel(id, platform) {
+  const found = (TERMINAL_CHOICES[platformKey(platform)] || []).find((x) => x.id === id);
+  return found ? found.label : id;
+}
+
+function askLine(rl, q) {
+  return new Promise((resolve) => rl.question(q, resolve));
+}
+
+async function configureTerminalInteractive(platform) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error('当前不是交互式终端,请设置 CLAUDE_RESCUE_TERMINAL');
+  }
+  const readline = require('readline');
+  const choices = terminalChoicesForPlatform(platform);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    process.stdout.write('请选择接管会话时使用的终端:\n');
+    choices.forEach((choice, i) => process.stdout.write(`  ${i + 1}. ${choice.label} (${choice.id})\n`));
+    let choice;
+    while (!choice) {
+      const answer = (await askLine(rl, '输入编号: ')).trim();
+      const n = Number(answer);
+      if (Number.isInteger(n) && n >= 1 && n <= choices.length) choice = choices[n - 1];
+      else process.stdout.write('无效选择,请重新输入。\n');
+    }
+    const cfg = { terminal: choice.id, terminalCommand: null };
+    if (choice.id === 'custom') {
+      const template = (await askLine(rl, '输入自定义命令模板(必须包含 {command}): ')).trim();
+      const normalized = normalizeTerminalConfig({ platform, terminal: 'custom', terminalCommand: template });
+      cfg.terminalCommand = normalized.terminalCommand;
+    }
+    const saved = { terminal: cfg.terminal };
+    if (cfg.terminalCommand) saved.terminalCommand = cfg.terminalCommand;
+    saveToolConfig(saved);
+    process.stdout.write('已保存终端配置到 ' + getToolConfigFile() + '\n');
+  } finally {
+    rl.close();
+  }
+}
+
 // 给用户看 / 复制到剪贴板的完整命令(启动新的 Claude,不带 --resume)。
 function humanResumeCommand(sessionId, opts) {
   return `claude ${resumeFlagsPosix(opts)}${shellSingleQuote(resumePrompt(sessionId))}`;
@@ -299,16 +482,41 @@ function humanResumeCommand(sessionId, opts) {
 // 构造"在 cwd 下开终端并启动 Claude(prompt 里带上卡住的 sessionId)"的进程命令。
 // 注意: 是 `claude '<prompt>'` 启动新会话,不带 --resume。
 function buildResumeCommand(platform, cwd, sessionId, prompt, opts) {
+  opts = opts || {};
+  const terminalCfg = normalizeTerminalConfig({
+    platform,
+    terminal: opts.terminal || defaultTerminalForPlatform(platform),
+    terminalCommand: opts.terminalCommand,
+  });
+  const terminal = terminalCfg.terminal;
   if (platform === 'win32') {
     const ps = `Set-Location -LiteralPath ${psSingleQuote(cwd)}; claude ${resumeFlagsWin(opts)}${psSingleQuote(prompt)}`;
+    if (terminal === 'windows-terminal') return { cmd: 'wt', args: ['new-tab', 'powershell', '-NoExit', '-Command', ps] };
+    if (terminal === 'custom') return buildCustomTerminalCommand(terminalCfg.terminalCommand, cwd, `claude ${resumeFlagsWin(opts)}${psSingleQuote(prompt)}`);
     return { cmd: 'cmd', args: ['/c', 'start', 'claude-rescue', 'powershell', '-NoExit', '-Command', ps] };
   }
-  const inner = `cd ${shellSingleQuote(cwd)} && claude ${resumeFlagsPosix(opts)}${shellSingleQuote(prompt)}`;
+  const claudeCmd = `claude ${resumeFlagsPosix(opts)}${shellSingleQuote(prompt)}`;
+  const inner = `cd ${shellSingleQuote(cwd)} && ${claudeCmd}`;
   if (platform === 'darwin') {
-    const as = `tell application "Terminal"\nactivate\ndo script ${appleStringLiteral(inner)}\nend tell`;
+    let as;
+    if (terminal === 'iterm2') {
+      as = `tell application "iTerm2"\nactivate\ncreate window with default profile\ntell current session of current window\nwrite text ${appleStringLiteral(inner)}\nend tell\nend tell`;
+    } else if (terminal === 'custom') {
+      return buildCustomTerminalCommand(terminalCfg.terminalCommand, cwd, claudeCmd);
+    } else {
+      as = `tell application "Terminal"\nactivate\ndo script ${appleStringLiteral(inner)}\nend tell`;
+    }
     return { cmd: 'osascript', args: ['-e', as] };
   }
-  return { cmd: 'x-terminal-emulator', args: ['-e', 'bash', '-c', `${inner}; exec $SHELL`] };
+  if (terminal === 'custom') return buildCustomTerminalCommand(terminalCfg.terminalCommand, cwd, claudeCmd);
+  const keepOpen = `${claudeCmd}; exec $SHELL`;
+  if (terminal === 'gnome-terminal') return { cmd: 'gnome-terminal', args: ['--working-directory', cwd, '--', 'bash', '-lc', keepOpen] };
+  if (terminal === 'konsole') return { cmd: 'konsole', args: ['--workdir', cwd, '-e', 'bash', '-lc', keepOpen] };
+  if (terminal === 'xfce4-terminal') return { cmd: 'xfce4-terminal', args: ['--working-directory', cwd, '--command', `bash -lc ${shellSingleQuote(keepOpen)}`] };
+  if (terminal === 'kitty') return { cmd: 'kitty', args: ['--directory', cwd, 'bash', '-lc', keepOpen] };
+  if (terminal === 'wezterm') return { cmd: 'wezterm', args: ['start', '--cwd', cwd, '--', 'bash', '-lc', keepOpen] };
+  if (terminal === 'alacritty') return { cmd: 'alacritty', args: ['--working-directory', cwd, '-e', 'bash', '-lc', keepOpen] };
+  return { cmd: 'x-terminal-emulator', args: ['-e', 'bash', '-lc', keepOpen] };
 }
 
 // 真正打开终端执行,返回是否成功发起。
@@ -542,9 +750,11 @@ function tokenizeKeys(s) {
 const CHROME_LINES = 5; // 标题 + 副标题 + 列头 + 2 行底部
 
 class App {
-  constructor(dir, color) {
+  constructor(dir, color, options) {
+    options = options || {};
     this.dir = dir;
     this.color = color;
+    this.terminalConfig = options.terminalConfig || null;
     this.C = makeColors(color);
     this.sortMode = 'recent';
     this.selected = 0;
@@ -552,7 +762,7 @@ class App {
     this.mode = 'list';       // list | detail | search | resume
     this.message = '';
     this.search = '';
-    this.resume = null;       // 接管向导状态: { s, where, step, skipPermissions, name }
+    this.resume = null;       // 接管向导状态: { s, where, step, skipPermissions, name, terminalChoices }
     this.resumeAfter = 'list';// 接管完成 / 取消后返回的视图
     this.autoRefresh = true;  // 定时重读会话目录
     this.refreshMs = 2000;
@@ -653,12 +863,37 @@ class App {
         break;
       case 'askName':                      // 是否命名(--name),默认否
         if (c === 'y' || c === 'Y') f.step = 'inputName';
-        else if (c === 'n' || c === 'N' || k.name === 'enter') { f.name = ''; this.finishResume(); }
+        else if (c === 'n' || c === 'N' || k.name === 'enter') { f.name = ''; this.prepareResumeLaunch(); }
         break;
       case 'inputName':                    // 输入名字,enter 确定(空名字视为不命名)
-        if (k.name === 'enter') this.finishResume();
+        if (k.name === 'enter') this.prepareResumeLaunch();
         else if (k.name === 'backspace') f.name = [...f.name].slice(0, -1).join('');
         else if (k.name === 'char') f.name += c.replace(/[\r\n]/g, '');
+        break;
+      case 'terminalChoice':
+        if (k.name === 'up') f.terminalIndex = Math.max(0, f.terminalIndex - 1);
+        else if (k.name === 'down') f.terminalIndex = Math.min(f.terminalChoices.length - 1, f.terminalIndex + 1);
+        else if (k.name === 'char' && /^[1-9]$/.test(c)) {
+          const n = Number(c) - 1;
+          if (n >= 0 && n < f.terminalChoices.length) f.terminalIndex = n;
+        } else if (k.name === 'enter') {
+          const choice = f.terminalChoices[f.terminalIndex];
+          if (!choice) break;
+          f.terminal = choice.id;
+          if (choice.id === 'custom') f.step = 'inputTerminalCommand';
+          else this.saveTerminalAndFinish({ terminal: choice.id, terminalCommand: null });
+        }
+        break;
+      case 'inputTerminalCommand':
+        if (k.name === 'enter') {
+          try {
+            const cfg = normalizeTerminalConfig({ platform: process.platform, terminal: 'custom', terminalCommand: f.terminalCommand });
+            this.saveTerminalAndFinish(cfg);
+          } catch (e) {
+            this.message = e.message;
+          }
+        } else if (k.name === 'backspace') f.terminalCommand = [...f.terminalCommand].slice(0, -1).join('');
+        else if (k.name === 'char') f.terminalCommand += c.replace(/[\r\n]/g, '');
         break;
     }
   }
@@ -669,11 +904,43 @@ class App {
     this.message = '已取消接管';
   }
 
-  finishResume() {
+  prepareResumeLaunch() {
+    const f = this.resume;
+    if (!f) return;
+    f.launchOpts = { skipPermissions: f.skipPermissions, name: f.name.trim() };
+    let cfg;
+    try {
+      cfg = this.terminalConfig || resolveTerminalConfig({
+        cli: {},
+        env: process.env,
+        fileConfig: readToolConfig(),
+        platform: process.platform,
+      });
+    } catch (e) {
+      this.message = '终端配置无效: ' + e.message;
+      return;
+    }
+    if (cfg) return this.finishResume(cfg);
+    f.step = 'terminalChoice';
+    f.terminalChoices = terminalChoicesForPlatform(process.platform);
+    f.terminalIndex = 0;
+    f.terminalCommand = '';
+    this.message = '';
+  }
+
+  saveTerminalAndFinish(cfg) {
+    const saved = { terminal: cfg.terminal };
+    if (cfg.terminalCommand) saved.terminalCommand = cfg.terminalCommand;
+    try { saveToolConfig(saved); } catch (e) { this.message = '保存终端配置失败: ' + e.message; return; }
+    this.terminalConfig = { terminal: cfg.terminal, terminalCommand: cfg.terminalCommand || null, source: 'config' };
+    this.finishResume(this.terminalConfig);
+  }
+
+  finishResume(terminalConfig) {
     const f = this.resume;
     this.mode = this.resumeAfter || 'list';
     this.resume = null;
-    if (f) this.launchResume(f.s, { skipPermissions: f.skipPermissions, name: f.name.trim() });
+    if (f) this.launchResume(f.s, { ...(f.launchOpts || { skipPermissions: f.skipPermissions, name: f.name.trim() }), ...(terminalConfig || {}) });
   }
 
   launchResume(s, opts) {
@@ -686,6 +953,7 @@ class App {
     const extra = [];
     if (opts.skipPermissions) extra.push('跳过权限');
     if (opts.name) extra.push('名字:' + opts.name);
+    if (opts.terminal) extra.push('终端:' + terminalLabel(opts.terminal, process.platform));
     const suffix = extra.length ? ' [' + extra.join(' · ') + ']' : '';
     this.message = opened
       ? ('已打开终端,启动 Claude 处理会话 ' + s.sessionId.slice(0, 8) + suffix + (copied ? ' (命令已复制)' : ''))
@@ -880,6 +1148,8 @@ class App {
       case 'skipPerm':  return 'y 开启 · n/enter 默认否 · esc 取消';
       case 'askName':   return 'y 命名 · n/enter 默认否 · esc 取消';
       case 'inputName': return '输入名字 · enter 确定 · esc 取消';
+      case 'terminalChoice': return '↑↓ 选择 · 数字选择 · enter 确定 · esc 取消';
+      case 'inputTerminalCommand': return '输入模板 · enter 保存 · esc 取消';
     }
     return 'esc 取消';
   }
@@ -891,6 +1161,16 @@ class App {
     const id = (f.s.sessionId || '').slice(0, 8);
     if (f.step === 'inputName') {
       return C.bold(' 会话名字(--name): ') + truncEnd(f.name, Math.max(1, cols - 20)) + '▏';
+    }
+    if (f.step === 'terminalChoice') {
+      const parts = f.terminalChoices.map((choice, i) => {
+        const text = `${i + 1}.${choice.label}`;
+        return i === f.terminalIndex ? C.inv(text) : text;
+      });
+      return truncEnd(' 选择接管终端: ' + parts.join('  '), cols);
+    }
+    if (f.step === 'inputTerminalCommand') {
+      return C.bold(' 自定义模板: ') + truncEnd(f.terminalCommand, Math.max(1, cols - 14)) + '▏';
     }
     let q;
     if (f.step === 'confirm') q = `在 ${f.where} 打开终端,启动 Claude 处理卡住的会话 ${id}?`;
@@ -940,14 +1220,32 @@ function help() {
   claude-rescue               启动交互式界面(在终端里默认如此)
   claude-rescue --list        打印纯文本表格后退出
   claude-rescue --json        输出 JSON 后退出
+  claude-rescue --configure-terminal
+                              重新选择接管时使用的终端
 
 选项
   -l, --list         非交互的表格输出
       --json         JSON 输出(给脚本用)
       --dir <路径>   指定会话目录
+      --terminal <id>
+                     接管时使用的终端
+      --terminal-command <模板>
+                     --terminal custom 时使用的命令模板
+      --configure-terminal
+                     重新配置接管终端
       --no-color     关闭颜色(也遵守 $NO_COLOR)
   -h, --help         显示本帮助
   -v, --version      显示版本
+
+终端 id
+  macOS:   terminal, iterm2, custom
+  Windows: powershell, windows-terminal, custom
+  Linux:   x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal,
+           kitty, wezterm, alacritty, custom
+
+终端配置优先级
+  --terminal > CLAUDE_RESCUE_TERMINAL > ~/.claude-rescue/config.json
+  custom 模板必须包含 {command},可选 {cwd}
 
 会话目录(自动定位)
   $CLAUDE_CONFIG_DIR/sessions   若设置了 CLAUDE_CONFIG_DIR
@@ -966,26 +1264,76 @@ function help() {
 `);
 }
 
-function main() {
-  const args = process.argv.slice(2);
-  const opts = { json: false, list: false, color: undefined, dir: null };
-
+function parseArgs(args) {
+  const opts = {
+    json: false, list: false, color: undefined, dir: null,
+    terminal: null, terminalCommand: null, configureTerminal: false,
+    help: false, version: false,
+  };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === '--help' || a === '-h') { help(); return; }
-    else if (a === '--version' || a === '-v') { process.stdout.write('claude-rescue ' + VERSION + '\n'); return; }
+    if (a === '--help' || a === '-h') opts.help = true;
+    else if (a === '--version' || a === '-v') opts.version = true;
     else if (a === '--json') opts.json = true;
     else if (a === '--list' || a === '-l' || a === '--plain') opts.list = true;
     else if (a === '--no-color') opts.color = false;
     else if (a === '--color') opts.color = true;
     else if (a === '--dir') opts.dir = args[++i];
     else if (a.startsWith('--dir=')) opts.dir = a.slice('--dir='.length);
-    else { process.stderr.write('未知选项: ' + a + '\n(用 --help 查看帮助)\n'); process.exit(2); }
+    else if (a === '--terminal') opts.terminal = args[++i];
+    else if (a.startsWith('--terminal=')) opts.terminal = a.slice('--terminal='.length);
+    else if (a === '--terminal-command') opts.terminalCommand = args[++i];
+    else if (a.startsWith('--terminal-command=')) opts.terminalCommand = a.slice('--terminal-command='.length);
+    else if (a === '--configure-terminal') opts.configureTerminal = true;
+    else {
+      const e = new Error('未知选项: ' + a);
+      e.exitCode = 2;
+      throw e;
+    }
   }
+  return opts;
+}
+
+function main() {
+  let opts;
+  try { opts = parseArgs(process.argv.slice(2)); }
+  catch (e) {
+    process.stderr.write(e.message + '\n(用 --help 查看帮助)\n');
+    process.exit(e.exitCode || 2);
+  }
+  if (opts.help) { help(); return; }
+  if (opts.version) { process.stdout.write('claude-rescue ' + VERSION + '\n'); return; }
 
   const dir = opts.dir ? expandHome(opts.dir) : getSessionsDir();
   const color = opts.color !== undefined ? opts.color : (!!process.stdout.isTTY && !process.env.NO_COLOR);
-  const interactive = !opts.json && !opts.list && !!process.stdout.isTTY && !!process.stdin.isTTY;
+  const interactive = !opts.json && !opts.list && !opts.configureTerminal && !!process.stdout.isTTY && !!process.stdin.isTTY;
+
+  if (opts.configureTerminal) {
+    configureTerminalInteractive(process.platform).catch((e) => {
+      process.stderr.write(e.message + '\n');
+      process.exit(2);
+    });
+    return;
+  }
+
+  let fileConfig = {};
+  try { fileConfig = readToolConfig(); }
+  catch (e) {
+    process.stderr.write('读取终端配置失败: ' + e.message + '\n请运行 claude-rescue --configure-terminal 重新配置。\n');
+    process.exit(2);
+  }
+  let terminalConfig = null;
+  try {
+    terminalConfig = resolveTerminalConfig({
+      cli: opts,
+      env: process.env,
+      fileConfig,
+      platform: process.platform,
+    });
+  } catch (e) {
+    process.stderr.write('终端配置无效: ' + e.message + '\n');
+    process.exit(2);
+  }
 
   if (!interactive) {
     const { sessions, missing } = loadSessions(dir);
@@ -998,15 +1346,18 @@ function main() {
     return;
   }
 
-  new App(dir, color).start();
+  new App(dir, color, { terminalConfig, cliTerminal: { terminal: opts.terminal, terminalCommand: opts.terminalCommand } }).start();
 }
 
 if (require.main === module) main();
 
 module.exports = {
   VERSION, expandHome, getConfigDir, getSessionsDir, isAlive,
+  getToolConfigFile, readToolConfig, saveToolConfig,
   loadSessions, sortSessions, relTime, sortLabel, statusLabel,
   findTranscript, detectAbnormal, annotateSessions, abnormalLabel,
   resumePrompt, humanResumeCommand, buildResumeCommand,
+  parseArgs, normalizeTerminalConfig, resolveTerminalConfig, buildCustomTerminalCommand,
+  terminalChoicesForPlatform, terminalLabel, configureTerminalInteractive,
   parseKey, tokenizeKeys, App,
 };
