@@ -485,7 +485,9 @@ function buildResumeCommand(platform, cwd, sessionId, prompt, opts) {
     const ps = `Set-Location -LiteralPath ${psSingleQuote(cwd)}; claude ${resumeFlagsWin(opts)}${psSingleQuote(prompt)}`;
     if (terminal === 'windows-terminal') return { cmd: 'wt', args: ['new-tab', 'powershell', '-NoExit', '-Command', ps] };
     if (terminal === 'custom') return buildCustomTerminalCommand(terminalCfg.terminalCommand, cwd, `claude ${resumeFlagsWin(opts)}${psSingleQuote(prompt)}`);
-    return { cmd: 'cmd', args: ['/c', 'start', 'claude-rescue', 'powershell', '-NoExit', '-Command', ps] };
+    // start 的第一个带引号参数会被当作窗口标题;空字符串经 spawn 序列化为 ""，
+    // 避免 claude-rescue 被误认为要执行的程序。
+    return { cmd: 'cmd', args: ['/c', 'start', '', 'powershell', '-NoExit', '-Command', ps] };
   }
   const claudeCmd = `claude ${resumeFlagsPosix(opts)}${shellSingleQuote(prompt)}`;
   const inner = `cd ${shellSingleQuote(cwd)} && ${claudeCmd}`;

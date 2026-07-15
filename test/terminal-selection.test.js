@@ -53,6 +53,14 @@ test('Windows Terminal command launches wt with PowerShell command', () => {
   assert.match(built.args[4], /claude '继续'/);
 });
 
+test('Windows default terminal uses start with empty title', () => {
+  const built = rescue.buildResumeCommand('win32', 'C:\\Users\\edy\\proj', 'abc123', '继续', {});
+
+  assert.equal(built.cmd, 'cmd');
+  assert.deepEqual(built.args.slice(0, 3), ['/c', 'start', '']);
+  assert.equal(built.args[3], 'powershell');
+});
+
 test('Linux kitty command uses directory and bash login command', () => {
   const built = rescue.buildResumeCommand('linux', '/work/proj', 'abc123', '继续', { terminal: 'kitty' });
 
